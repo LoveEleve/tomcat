@@ -59,7 +59,7 @@ public class SynchronizedQueue<T> {
         if (insert == size) {
             insert = 0;
         }
-        // 插入位置和移除位置相同,数组已满,扩容
+        // 插入位置和移除位置相同,数组已满,则扩容
         if (insert == remove) {
             expand();
         }
