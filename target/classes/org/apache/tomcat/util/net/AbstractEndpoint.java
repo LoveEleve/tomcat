@@ -38,6 +38,7 @@ import java.util.concurrent.*;
 
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
+import javax.net.ssl.SSLContext;
 
 import org.apache.juli.logging.Log;
 import org.apache.tomcat.util.ExceptionUtils;
@@ -1114,7 +1115,6 @@ public abstract class AbstractEndpoint<S,U> {
             */
             TaskQueue taskqueue = new TaskQueue();
             TaskThreadFactory tf = new TaskThreadFactory(getName() + "-exec-", daemon, getThreadPriority());
-            // 默认的核心线程数 = 10，最大线程数 = 200 ， 非核心线程的超时时间为60s
             executor = new ThreadPoolExecutor(getMinSpareThreads(), getMaxThreads(), 60, TimeUnit.SECONDS,taskqueue, tf);
             taskqueue.setParent( (ThreadPoolExecutor) executor);
         }
@@ -1430,7 +1430,7 @@ public abstract class AbstractEndpoint<S,U> {
     }
 
 
-    public final void start() throws Exception {
+    public final void start() throws Exception { 
         // 如果未绑定,则进行绑定,不过默认情况是在初始化的时候就进行bind()了
         if (bindState == BindState.UNBOUND) {
             bindWithCleanup();
@@ -1441,6 +1441,7 @@ public abstract class AbstractEndpoint<S,U> {
 
 
     protected void startAcceptorThread() {
+        // 创建Acceptor对象 - 传入了Endpoint
         acceptor = new Acceptor<>(this);
         String threadName = getName() + "-Acceptor";
         acceptor.setThreadName(threadName);
@@ -1501,10 +1502,7 @@ public abstract class AbstractEndpoint<S,U> {
     protected Log getLogCertificate() {
         return getLog();
     }
-    /*
-        1. 如果 maxConnections = -1,那么代表不限制连接数,直接返回即可(生存环境下会做限制吗？)
-        2. 否则:初始化 LimitLatch(传入maxConnections - 默认为 8*1024 = 8192-8K)
-    */
+
     protected LimitLatch initializeConnectionLatch() {
         if (maxConnections==-1) {
             return null;

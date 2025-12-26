@@ -32,7 +32,8 @@ package org.apache.tomcat.util.collections;
 
     ===> 可惜,阅读完代码后发现和Disruptor是不一样的设计，Disruptor才是真的 GC-FREE
     在这里还是会创建 PollerEvent对象,只不过没有使用Node来包装而已(JDK的做法)
-    不对,这里和Disruptor是一样的，因为PollerEvent有对象池啊
+    ===>
+    不对,这里和Disruptor是一样的，因为PollerEvent有对象池啊 - 所以依旧：我剑也未尝不利
 */
 public class SynchronizedQueue<T> {
 
@@ -56,7 +57,7 @@ public class SynchronizedQueue<T> {
     public synchronized boolean offer(T t) {
         queue[insert++] = t;
 
-        // Wrap 到达数组末尾,下一次在0位置插入 good test oo pp kk ee ff gg hh
+        // Wrap 到达数组末尾,下一次在0位置插入 
         if (insert == size) {
             insert = 0;
         }

@@ -312,11 +312,11 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
 
             // ========== 4. 创建并启动 Poller 线程 ==========
             // Start poller thread
-            poller = new Poller(); // 启动事件轮询线程
-            Thread pollerThread = new Thread(poller, getName() + "-Poller");
+            poller = new Poller(); // 创建Poller对象(Poller对象本身就是一个Runnable)
+            Thread pollerThread = new Thread(poller, getName() + "-Poller"); // 启动事件轮询线程
             pollerThread.setPriority(threadPriority);
             pollerThread.setDaemon(true);
-            pollerThread.start();
+            pollerThread.start(); // 启动 - 开始执行run()方法
             
             // ========== 5. 启动 Acceptor 线程 ==========
             startAcceptorThread(); // 启动接收连接的线程
@@ -584,19 +584,44 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
     /**
      * Poller class.
      */
+    /*
+        Poller 是 Tomcat NIO 模型中的事件轮询器,负责监听已建立连接的 I/O 事件(可读/可写),是 Reactor 模式中的核心组件
+            核心职责:
+                - 监听 Socket I/O 事件: 使用 NIO Selector 监听多个 Socket 的读写事件
+                - 事件分发: 当 Socket 就绪时,将其分发给工作线程池处理
+                - 连接管理: 管理所有已建立的长连接(Keep-Alive)
+                - 超时检测: 定期检查并清理超时的连接
+    */
     public class Poller implements Runnable {
 
-        private Selector selector;
-        private final SynchronizedQueue<PollerEvent> events =
-                new SynchronizedQueue<>();
+        private Selector selector; // NIO 多路复用选择器 - 用于关心IO事件 (OP_READ / OP_WRITE / OP_REGISTER)
+        private final SynchronizedQueue<PollerEvent> events = 
+                new SynchronizedQueue<>(); // 事件队列(实现 GC-Free) - Acceptor线程会将事件对象(pollerEvent)放入到该队列中,然后Poller线程会进行消费
 
-        private volatile boolean close = false;
+        private volatile boolean close = false; // 停机标识
         // Optimize expiration handling
-        private long nextExpiration = 0;
+        /*
+            下次超时检查时间戳(性能优化)：?? 这个属性是什么意思？后面在看吧
+            核心作用:
+                - 减少超时检查频率：避免每次循环都遍历所有连接检查超时
+                - 智能触发
+                    - selector.select() 超时返回（说明负载低）
+                    - 达到 nextExpiration 时间
+                    - 服务器正在关闭
+        */
+        private long nextExpiration = 0; 
+        /*
+            唤醒计数器（优化 selector 唤醒）
+                - 减少不必要的 selector.wakeup() 调用（该操作成本高）
+                - 无锁设计：使用 CAS 原子操作保证线程安全
+            值:
+                - 0: Selector正在 select()阻塞
+                >0: 其他线程添加了新事件，需要唤醒
+                -1: Poller线程已经被唤醒,正在处理,此时使用selectNow()
+        */
+        private AtomicLong wakeupCounter = new AtomicLong(0); 
 
-        private AtomicLong wakeupCounter = new AtomicLong(0);
-
-        private volatile int keyCount = 0;
+        private volatile int keyCount = 0; // 就绪的事件数量
 
         public Poller() throws IOException {
             this.selector = Selector.open();

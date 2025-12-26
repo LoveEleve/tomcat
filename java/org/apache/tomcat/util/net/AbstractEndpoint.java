@@ -39,6 +39,7 @@ import java.util.concurrent.*;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
 
+
 import org.apache.juli.logging.Log;
 import org.apache.tomcat.util.ExceptionUtils;
 import org.apache.tomcat.util.IntrospectionUtils;
@@ -1440,13 +1441,17 @@ public abstract class AbstractEndpoint<S,U> {
 
 
     protected void startAcceptorThread() {
+        /*
+            创建Acceptor对象 - 传入了Endpoint对象
+            Acceptor本身就是一个Runnable对象
+         */
         acceptor = new Acceptor<>(this);
         String threadName = getName() + "-Acceptor";
         acceptor.setThreadName(threadName);
         Thread t = new Thread(acceptor, threadName);
         t.setPriority(getAcceptorThreadPriority());
         t.setDaemon(getDaemon());
-        t.start();
+        t.start(); // 启动线程
     }
 
 

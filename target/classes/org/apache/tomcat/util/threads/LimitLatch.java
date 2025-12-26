@@ -40,35 +40,35 @@ public class LimitLatch {
 
         @Override
         protected int tryAcquireShared(int ignored) {
-            long newCount = count.incrementAndGet();
-            if (!released && newCount > limit) {
+            long newCount = count.incrementAndGet(); // 递增连接数并且返回递增后的值
+            if (!released && newCount > limit) { // 超过连接限制
                 // Limit exceeded
-                count.decrementAndGet();
-                return -1;
+                count.decrementAndGet(); // 回滚上面递增的计数
+                return -1; // 返回-1,回到AQS中,进入到阻塞的流程
             } else {
-                return 1;
+                return 1; // 否则返回成功
             }
         }
 
         @Override
         protected boolean tryReleaseShared(int arg) {
-            count.decrementAndGet();
+            count.decrementAndGet(); // 递减count
             return true;
         }
     }
 
-    private final Sync sync;
-    private final AtomicLong count;
-    private volatile long limit;
-    private volatile boolean released = false;
+    private final Sync sync; // AQS同步器
+    private final AtomicLong count; // 当前连接数
+    private volatile long limit; // 最大连接限制
+    private volatile boolean released = false; // 是否已释放全部等待线程
 
     /**
      * Instantiates a LimitLatch object with an initial limit.
      * @param limit - maximum number of concurrent acquisitions of this latch
      */
     public LimitLatch(long limit) {
-        this.limit = limit;
-        this.count = new AtomicLong(0);
+        this.limit = limit; // 最大连接数限制
+        this.count = new AtomicLong(0); // 当前连接数,初始化为0
         this.sync = new Sync();
     }
 
@@ -110,17 +110,19 @@ public class LimitLatch {
      * latch is current available.
      * @throws InterruptedException If the current thread is interrupted
      */
+    // 获取连接许可
     public void countUpOrAwait() throws InterruptedException {
         if (log.isTraceEnabled()) {
             log.trace("Counting up["+Thread.currentThread().getName()+"] latch="+getCount());
         }
-        sync.acquireSharedInterruptibly(1);
+        sync.acquireSharedInterruptibly(1); // 最终会调用到自己的tryAcquireShared,返回值<0则会进行阻塞，反之继续运行
     }
 
     /**
      * Releases a shared latch, making it available for another thread to use.
      * @return the previous counter value
      */
+    // 释放连接许可
     public long countDown() {
         sync.releaseShared(0);
         long result = getCount();
