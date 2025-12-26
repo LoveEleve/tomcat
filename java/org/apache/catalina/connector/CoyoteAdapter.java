@@ -84,6 +84,12 @@ public class CoyoteAdapter implements Adapter {
      *
      * @param connector CoyoteConnector that owns this processor
      */
+    /*
+       CoyoteAdapter 是 Tomcat 两层架构（Coyote + Catalina）解耦的关键
+       它不仅做对象转换，还负责请求的预处理和映射
+       通过 Mapper 将请求路由到正确的 Servlet
+       支持同步和异步请求处理
+    */
     public CoyoteAdapter(Connector connector) {
 
         super();

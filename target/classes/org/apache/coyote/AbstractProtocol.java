@@ -73,6 +73,8 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
      * Endpoint that provides low-level network I/O - must be matched to the ProtocolHandler implementation
      * (ProtocolHandler using NIO, requires NIO Endpoint etc.).
      */
+    // Endpoint 是负责底层网络 I/O 的组件(对于 HTTP/1.1 协议，通常是 NioEndpoint、Nio2Endpoint)
+    // 管理 ServerSocket 的创建和绑定 / 管理 Acceptor 线程（接受连接） / 管理 Poller 线程（NIO 事件轮询） / 管理工作线程池（处理请求）
     private final AbstractEndpoint<S, ?> endpoint;
 
 
@@ -90,12 +92,12 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
 
 
     public AbstractProtocol(AbstractEndpoint<S, ?> endpoint) {
-        this.endpoint = endpoint;
-        ConnectionHandler<S> cHandler = new ConnectionHandler<>(this);
-        setHandler(cHandler);
-        getEndpoint().setHandler(cHandler);
-        setSoLinger(Constants.DEFAULT_CONNECTION_LINGER);
-        setTcpNoDelay(Constants.DEFAULT_TCP_NO_DELAY);
+        this.endpoint = endpoint; // 保存endpoint
+        ConnectionHandler<S> cHandler = new ConnectionHandler<>(this); //  创建 ConnectionHandler
+        setHandler(cHandler); // 设置handler 到协议处理器中
+        getEndpoint().setHandler(cHandler); // 设置handler到endpoint中 (Endpoint 在接收到新连接或 I/O 事件时，会回调 Handler 的方法)
+        setSoLinger(Constants.DEFAULT_CONNECTION_LINGER); // 设置 SO_LINGER 选项(控制 Socket 关闭时的行为,决定是否等待未发送的数据),默认值为-1
+        setTcpNoDelay(Constants.DEFAULT_TCP_NO_DELAY); // 设置 TCP_NODELAY 选项(控制是否启用 Nagle 算法,Nagle 算法会合并小数据包以减少网络开销,默认禁用)
     }
 
 
@@ -806,7 +808,13 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
 
 
     // ------------------------------------------- Connection handler base class
-
+    /*
+        作为 Endpoint 和 Protocol 之间的桥梁，负责处理每个连接的生命周期
+        1. 创建 Processor:创建、复用、回收 Processor 实例
+        2. 处理连接:将 Socket 事件分发给对应的 Processor
+        3. 协议升级:处理 HTTP/2、WebSocket 等协议升级
+        4. 异步处理:管理异步请求的超时和状态
+    */
     protected static class ConnectionHandler<S> implements AbstractEndpoint.Handler<S> {
 
         private final AbstractProtocol<S> proto;

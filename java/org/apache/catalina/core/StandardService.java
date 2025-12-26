@@ -89,12 +89,14 @@ public class StandardService extends LifecycleMBeanBase implements Service {
 
     /**
      * Mapper.
-     */
+     * Mapper 是 Tomcat 的请求路由器，负责将 HTTP 请求路由到正确的 Web 应用
+     * 在 Mapper 内部维护了一个完整的路由映射:MappedHost[] hosts;(Host 映射)*/
     protected final Mapper mapper = new Mapper();
 
 
     /**
      * Mapper listener.
+     * 容器事件监听器,监听容器层级结构的变化，并同步更新 Mapper 中的路由映射表
      */
     protected final MapperListener mapperListener = new MapperListener(this);
 
@@ -541,12 +543,19 @@ public class StandardService extends LifecycleMBeanBase implements Service {
     protected void initInternal() throws LifecycleException {
 
         super.initInternal();
-
+        // 初始化engine(可以看出来,一个service下只有一个engine)
+        // 默认只初始化了一个启停线程池
         if (engine != null) {
             engine.init();
         }
 
         // Initialize any Executors
+        /*
+            初始化线程池,都有哪些线程池呢？ -- 这里的线程池是在server.xml中配置的
+            在server.xml中默认是没有配置线程池的,那么这里的findExecutors()返回的空,也即不会执行循环中的代码
+            在server.xml中配置线程池的好处:多个Connector可以共用同一个线程池?
+        */
+
         for (Executor executor : findExecutors()) {
             if (executor instanceof JmxEnabled) {
                 ((JmxEnabled) executor).setDomain(getDomain());
@@ -555,9 +564,11 @@ public class StandardService extends LifecycleMBeanBase implements Service {
         }
 
         // Initialize mapper listener
+        // 这个listener是什么呢？
         mapperListener.init();
 
         // Initialize our defined Connectors
+        // 初始化连接器
         synchronized (connectorsLock) {
             for (Connector connector : connectors) {
                 try {

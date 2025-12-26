@@ -158,7 +158,7 @@ public class StandardContext extends ContainerBase implements Context, Notificat
     public StandardContext() {
 
         super();
-        pipeline.setBasic(new StandardContextValve());
+        pipeline.setBasic(new StandardContextValve()); // 为Context设置基础的Valve
         broadcaster = new NotificationBroadcasterSupport();
         // Set defaults
         if (!Globals.STRICT_SERVLET_COMPLIANCE) {
@@ -4673,6 +4673,7 @@ public class StandardContext extends ContainerBase implements Context, Notificat
         }
 
         // Post work directory
+        // 1. 设置工作目录
         postWorkDirectory();
 
         // Add missing components as necessary
@@ -4682,14 +4683,14 @@ public class StandardContext extends ContainerBase implements Context, Notificat
             }
 
             try {
-                setResources(new StandardRoot(this));
+                setResources(new StandardRoot(this));  // 2. 创建并且设计资源根
             } catch (IllegalArgumentException e) {
                 log.error(sm.getString("standardContext.resourcesInit"), e);
                 ok = false;
             }
         }
         if (ok) {
-            resourcesStart();
+            resourcesStart(); // 3. 启动资源管理器
         }
 
         if (getLoader() == null) {
@@ -4742,7 +4743,8 @@ public class StandardContext extends ContainerBase implements Context, Notificat
         }
 
 
-        // Binding thread
+        // Binding thread 
+        // 绑定线程上下文类加载器
         ClassLoader oldCCL = bindThread();
 
         try {
@@ -4801,9 +4803,17 @@ public class StandardContext extends ContainerBase implements Context, Notificat
                 }
 
                 // Notify our interested LifecycleListeners
+                // 触发 CONFIGURE_START_EVENT 事件
+                // 而StandardContext中有个ContextConfig监听器
+                // 这个监听器会感知这个事件 - 调用 ContextConfig.configureStart()方法
+                // 这个方法
                 fireLifecycleEvent(CONFIGURE_START_EVENT, null);
 
                 // Start our child containers, if not already started
+                /*
+                    启动 StandardContext下的所有子容器 - 也即所有的Wrapper（一个Servlet对应一个Wrapper）
+                    在上面已经处理好了所有的Wrapper了，下面就是调用到Wrapper.startInternal()
+                */
                 for (Container child : findChildren()) {
                     if (!child.getState().isAvailable()) {
                         child.start();
@@ -4884,6 +4894,10 @@ public class StandardContext extends ContainerBase implements Context, Notificat
             mergeParameters();
 
             // Call ServletContainerInitializers
+            /*
+                重要逻辑：回调所有 SCI 的 onStartup()
+                    - Spring框架的入口就在这里：SpringServletContainerInitializer.onStartup()
+            */
             for (Map.Entry<ServletContainerInitializer,Set<Class<?>>> entry : initializers.entrySet()) {
                 try {
                     entry.getKey().onStartup(entry.getValue(), getServletContext());
@@ -4895,6 +4909,12 @@ public class StandardContext extends ContainerBase implements Context, Notificat
             }
 
             // Configure and call application event listeners
+            /*
+                启动应用监听器
+                    - 实例化并启动所有 ServletContextListener
+                    - Spring 的 ContextLoaderListener 在这里被启动
+                    - 触发 contextInitialized() 事件，Spring 容器初始化就发生在这里
+            */
             if (ok) {
                 if (!listenerStart()) {
                     log.error(sm.getString("standardContext.listenerFail"));
@@ -4921,6 +4941,13 @@ public class StandardContext extends ContainerBase implements Context, Notificat
             }
 
             // Configure and call application filters
+            /*
+                初始化 Filter 
+                    - 遍历所有 FilterDef ，创建 ApplicationFilterConfig
+                    - 调用 Filter 的 init() 方法
+                    - 构建 Filter 链，为请求处理做准备
+
+            */
             if (ok) {
                 if (!filterStart()) {
                     log.error(sm.getString("standardContext.filterFail"));
@@ -4929,6 +4956,11 @@ public class StandardContext extends ContainerBase implements Context, Notificat
             }
 
             // Load and initialize all "load on startup" servlets
+            /*
+                加载并初始化启动时加载的 Servlet
+                    - 加载所有 load-on-startup >= 0 的 Servlet
+                    - 调用 Servlet 的 init() 方法 「Spring MVC 的 DispatcherServlet 就在这里被初始化」
+            */
             if (ok) {
                 if (!loadOnStartup(findChildren())) {
                     log.error(sm.getString("standardContext.servletFail"));
@@ -4977,7 +5009,12 @@ public class StandardContext extends ContainerBase implements Context, Notificat
                 broadcaster.sendNotification(notification);
             }
         } else {
-            setState(LifecycleState.STARTING);
+            /* 
+                触发 AFTER_START_EVENT 事件
+                MapperListener.registerContext()  [批量注册映射到 Mapper]
+                    - 下面去 MapperListener.registerContext()方法中看下
+            */
+            setState(LifecycleState.STARTING); 
         }
     }
 

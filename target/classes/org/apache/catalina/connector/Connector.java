@@ -57,6 +57,17 @@ import org.apache.tomcat.util.res.StringManager;
  * @author Craig R. McClanahan
  * @author Remy Maucherat
  */
+/*
+    核心组件,它是连接外部网络请求和内部容器处理的桥梁,每一个 Connector 都属于一个Service
+        1.Connector 是 Tomcat 接收客户端请求的入口点
+            - 监听指定的网络端口（如 8080、8443）
+            - 接收来自客户端的 HTTP/HTTPS/AJP 请求
+            - 将响应返回给客户端
+            1.1 协议处理的封装(ProtocolHandler - org.apache.coyote.http11.Http11NioProtocol - 实际处理网络 I/O 和协议解析)
+                    - 通过内部的 ProtocolHandler 处理不同的网络协议：HTTP/1.1、HTTP/2、AJP
+                    - 请求适配与转发(Adapter)
+                        - 通过 CoyoteAdapter 将 Coyote 层的请求/响应对象转换为 Catalina 层的对象
+*/
 public class Connector extends LifecycleMBeanBase {
 
     private static final Log log = LogFactory.getLog(Connector.class);
@@ -84,12 +95,14 @@ public class Connector extends LifecycleMBeanBase {
         // Instantiate protocol handler
         ProtocolHandler p = null;
         try {
+            // org.apache.coyote.http11.Http11NioProtocol
+            // 默认的协议处理器为该类
             Class<?> clazz = Class.forName(protocolHandlerClassName);
             p = (ProtocolHandler) clazz.getConstructor().newInstance();
         } catch (Exception e) {
             log.error(sm.getString("coyoteConnector.protocolHandlerInstantiationFailed"), e);
         } finally {
-            this.protocolHandler = p;
+            this.protocolHandler = p; // 设置到 Connector 中
         }
 
         if (Globals.STRICT_SERVLET_COMPLIANCE) {
@@ -1037,7 +1050,6 @@ public class Connector extends LifecycleMBeanBase {
         }
     }
 
-
     @SuppressWarnings("deprecation")
     @Override
     protected void initInternal() throws LifecycleException {
@@ -1045,6 +1057,7 @@ public class Connector extends LifecycleMBeanBase {
         super.initInternal();
 
         // Initialize adapter
+        // 创建适配器并且设置到协议处理器中
         adapter = new CoyoteAdapter(this);
         protocolHandler.setAdapter(adapter);
 

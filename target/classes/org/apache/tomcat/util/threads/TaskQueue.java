@@ -101,10 +101,16 @@ public class TaskQueue extends LinkedBlockingQueue<Runnable> {
             return super.offer(o);
         }
         //we are maxed out on threads, simply queue the object
+        /*
+            getPoolSizeNoLock -> workers : 也就是线程池的工作线程数
+            getSubmittedCount ->
+        */
+        // 1. 线程数已经到达了最大值,必须排队了,调用super.offer()
         if (parent.getPoolSizeNoLock() == parent.getMaximumPoolSize()) {
             return super.offer(o);
         }
         //we have idle threads, just add it to the queue
+        // 2.
         if (parent.getSubmittedCount() <= parent.getPoolSizeNoLock()) {
             return super.offer(o);
         }
@@ -140,4 +146,5 @@ public class TaskQueue extends LinkedBlockingQueue<Runnable> {
         }
         return super.take();
     }
+
 }

@@ -60,7 +60,7 @@ public class StandardEngine extends ContainerBase implements Engine {
      * Create a new StandardEngine component with the default basic Valve.
      */
     public StandardEngine() {
-        pipeline.setBasic(new StandardEngineValve());
+        pipeline.setBasic(new StandardEngineValve()); // 为Engine的pipeline设置一个基础的阀门
         /* Set the jvmRoute using the system property jvmRoute */
         try {
             setJvmRoute(System.getProperty("jvmRoute"));

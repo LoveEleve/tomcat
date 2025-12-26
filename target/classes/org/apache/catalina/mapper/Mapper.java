@@ -57,19 +57,21 @@ public final class Mapper {
      * Array containing the virtual hosts definitions.
      */
     // Package private to facilitate testing
+    // Host 映射(存储主机,比如localhost) - 这个MappedHost对象很重要
     volatile MappedHost[] hosts = new MappedHost[0];
 
 
     /**
      * Default host name.
      */
-    private volatile String defaultHostName = null;
-    private volatile MappedHost defaultHost = null;
+    private volatile String defaultHostName = null; // 默认主机名
+    private volatile MappedHost defaultHost = null; // 默认主机对象
 
 
     /**
      * Mapping from Context object to Context version to support RequestDispatcher mappings.
      */
+    // Context对象到ContextVersion的映射，用于支持RequestDispatcher映射
     private final Map<Context,ContextVersion> contextObjectToContextVersionMap = new ConcurrentHashMap<>();
 
 
@@ -1478,8 +1480,8 @@ public final class Mapper {
 
     protected abstract static class MapElement<T> {
 
-        public final String name;
-        public final T object;
+        public final String name; // 主机名称(比如“localhost”)
+        public final T object; // Host对象
 
         public MapElement(String name, T object) {
             this.name = name;
@@ -1493,12 +1495,12 @@ public final class Mapper {
 
     protected static final class MappedHost extends MapElement<Host> {
 
-        public volatile ContextList contextList;
+        public volatile ContextList contextList; // Context列表,存储该主机下所有web应用上下文
 
         /**
          * Link to the "real" MappedHost, shared by all aliases.
          */
-        private final MappedHost realHost;
+        private final MappedHost realHost; // 真实主机引用
 
         /**
          * Links to all registered aliases, for easy enumeration. This field is available only in the "real" MappedHost.
@@ -1567,7 +1569,7 @@ public final class Mapper {
 
     protected static final class ContextList {
 
-        public final MappedContext[] contexts;
+        public final MappedContext[] contexts; // 存储多个context上下文
         public final int nesting;
 
         public ContextList() {

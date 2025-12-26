@@ -363,20 +363,22 @@ public class MapperListener extends LifecycleMBeanBase implements ContainerListe
         if ("/".equals(contextPath)) {
             contextPath = "";
         }
+        // 获取Host容器
         Host host = (Host) context.getParent();
 
         WebResourceRoot resources = context.getResources();
         String[] welcomeFiles = context.findWelcomeFiles();
         List<WrapperMappingInfo> wrappers = new ArrayList<>();
-
+        // 获取 Context下的所有子容器 - 在这里是所有的Wrapper
         for (Container container : context.findChildren()) {
+            // 从每个 Wrapper中读取其URL映射模式 - 将 mapping 与 wrapper 包装为 WrapperMappingInfo , 并且保存在 wrappers 中
             prepareWrapperMappingInfo(context, (Wrapper) container, wrappers);
 
             if (log.isDebugEnabled()) {
                 log.debug(sm.getString("mapperListener.registerWrapper", container.getName(), contextPath, service));
             }
         }
-
+        // 批量注册到 Mapper中(MapperListener中有Mapper的引用)
         mapper.addContextVersion(host.getName(), host, contextPath, context.getWebappVersion(), context, welcomeFiles,
                 resources, wrappers);
 
@@ -442,9 +444,13 @@ public class MapperListener extends LifecycleMBeanBase implements ContainerListe
     private void prepareWrapperMappingInfo(Context context, Wrapper wrapper, List<WrapperMappingInfo> wrappers) {
         String wrapperName = wrapper.getName();
         boolean resourceOnly = context.isResourceOnlyServlet(wrapperName);
-        String[] mappings = wrapper.findMappings();
+        String[] mappings = wrapper.findMappings(); // 从Wrapper中读取映射 mappings = ["/hello","xxx"],一个servlet(但是可以配置多个映射）对应一个Wrapper
         for (String mapping : mappings) {
             boolean jspWildCard = (wrapperName.equals("jsp") && mapping.endsWith("/*"));
+            /*
+                将 wrapper 和 mapping 包装为一个 WrapperMappingInfo
+                在这里：一个wrapper 可能会构造出 多个 WrapperMappingInfo
+            */ 
             wrappers.add(new WrapperMappingInfo(mapping, wrapper, jspWildCard, resourceOnly));
         }
     }

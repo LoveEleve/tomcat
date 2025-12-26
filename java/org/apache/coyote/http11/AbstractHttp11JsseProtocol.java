@@ -20,7 +20,7 @@ import org.apache.tomcat.util.net.AbstractJsseEndpoint;
 import org.apache.tomcat.util.net.openssl.OpenSSLImplementation;
 
 public abstract class AbstractHttp11JsseProtocol<S> extends AbstractHttp11Protocol<S> {
-
+    // 继续调用父类的构造函数
     public AbstractHttp11JsseProtocol(AbstractJsseEndpoint<S, ?> endpoint) {
         super(endpoint);
     }

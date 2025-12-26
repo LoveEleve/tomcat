@@ -84,9 +84,17 @@ public class StandardWrapper extends ContainerBase implements ServletConfig, Wra
      */
     public StandardWrapper() {
 
-        super();
-        swValve = new StandardWrapperValve();
-        pipeline.setBasic(swValve);
+        super(); 
+        /*
+            创建Wrapper的默认阀门 - 这个是Wrapper的核心阀门
+            核心职责为:
+                - 调用 Servlet 实例（ servlet.service(request, response) 
+                - 处理 Filter 链
+                - 管理 Servlet 生命周期
+                - 统计请求信息（处理时间、请求次数、错误次数）
+        */
+        swValve = new StandardWrapperValve(); 
+        pipeline.setBasic(swValve); // 设置到pipeline中
         broadcaster = new NotificationBroadcasterSupport();
 
     }
@@ -1535,10 +1543,10 @@ public class StandardWrapper extends ContainerBase implements ServletConfig, Wra
             broadcaster.sendNotification(notification);
         }
 
-        // Start up this component
+        // Start up this component 调用父类的启动逻辑(ContainerBase.startInternal())
         super.startInternal();
 
-        setAvailable(0L);
+        setAvailable(0L); //  设置 Wrapper 为可用状态
 
         // Send j2ee.state.running notification
         if (this.getObjectName() != null) {

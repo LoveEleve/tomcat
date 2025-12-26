@@ -278,7 +278,6 @@ public abstract class ContainerBase extends LifecycleMBeanBase implements Contai
      */
     private int getStartStopThreadsInternal() {
         int result = getStartStopThreads();
-
         // Positive values are unchanged
         if (result > 0) {
             return result;
@@ -848,6 +847,7 @@ public abstract class ContainerBase extends LifecycleMBeanBase implements Contai
     @Override
     protected void initInternal() throws LifecycleException {
         BlockingQueue<Runnable> startStopQueue = new LinkedBlockingQueue<>();
+        // 创建线程池
         startStopExecutor = new ThreadPoolExecutor(getStartStopThreadsInternal(), getStartStopThreadsInternal(), 10,
                 TimeUnit.SECONDS, startStopQueue, new StartStopThreadFactory(getName() + "-startStop-"));
         startStopExecutor.allowCoreThreadTimeOut(true);

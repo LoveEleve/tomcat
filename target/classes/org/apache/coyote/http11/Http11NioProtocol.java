@@ -29,12 +29,12 @@ public class Http11NioProtocol extends AbstractHttp11JsseProtocol<NioChannel> {
 
     private static final Log log = LogFactory.getLog(Http11NioProtocol.class);
 
-
+    // 创建NioEndPoint - 这个组件是tomcat的核心,NIO相关的代码都在这个类里面
     public Http11NioProtocol() {
         this(new NioEndpoint());
     }
 
-
+    // 继续调用父类的构造方法
     public Http11NioProtocol(NioEndpoint endpoint) {
         super(endpoint);
     }

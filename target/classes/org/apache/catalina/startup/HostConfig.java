@@ -1061,7 +1061,7 @@ public class HostConfig implements LifecycleListener {
             return;
         }
 
-        ExecutorService es = host.getStartStopExecutor();
+        ExecutorService es = host.getStartStopExecutor(); // 获取启停线程池
         List<Future<?>> results = new ArrayList<>();
 
         for (String file : files) {
@@ -1073,8 +1073,14 @@ public class HostConfig implements LifecycleListener {
             }
 
             File dir = new File(appBase, file);
-            if (dir.isDirectory()) {
-                ContextName cn = new ContextName(file, false);
+            if (dir.isDirectory()) { // 当前 “debug-test”是否是目录(在这里走到的这个分支)
+                /*
+                    baseName = "debug-test" // 基础名称(目录/文件名)
+                    path = "/debug-test" // URL访问路径
+                    version = “” // 版本号
+                    name = "/debug-test" // 内部标识
+                */
+                ContextName cn = new ContextName(file, false); // 创建ContextName("debug-test",false)
 
                 if (tryAddServiced(cn.getName())) {
                     try {
@@ -1084,6 +1090,12 @@ public class HostConfig implements LifecycleListener {
                         }
 
                         // DeployDirectory will call removeServiced
+                        /*
+                            这里提交 DeployDirectory任务 到 启停线程池
+                                - this : HostConfig
+                                - cn : ContextName("debug-test",false)
+                                - dir : File("debug-test")
+                        */
                         results.add(es.submit(new DeployDirectory(this, cn, dir)));
                     } catch (Throwable t) {
                         ExceptionUtils.handleThrowable(t);
@@ -1162,6 +1174,8 @@ public class HostConfig implements LifecycleListener {
                 log.error(sm.getString("hostConfig.deployDescriptor.blocked", cn.getPath(), xml, xmlCopy));
                 context = new FailedContext();
             } else {
+                /*==========focus 创建StandardContext对象============*/ 
+                // 主要作用为创建了 StandardPipeline 和  StandardContextValve 
                 context = (Context) Class.forName(contextClass).getConstructor().newInstance();
             }
 

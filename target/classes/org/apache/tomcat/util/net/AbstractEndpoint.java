@@ -34,11 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
@@ -1087,14 +1083,38 @@ public abstract class AbstractEndpoint<S,U> {
         return paused;
     }
 
-
+    // 创建工作线程池
     public void createExecutor() {
         internalExecutor = true;
         if (getUseVirtualThreads()) {
+            // JDK-21的虚拟线程(默认为false)
             executor = new VirtualThreadExecutor(getName() + "-virt-");
         } else {
+            // 这里是默认情况
+            /*
+                创建工作队列 : 一个问题就来了,为什么Tomcat不用 JDK内置的阻塞队列呢？
+                可以看到,这里使用的依旧是JDk的线程池,但是队列则是tomcat自己实现的
+                这里需要回顾一下线程池的处理逻辑:
+                    这里有个核心,如果使用的是无界队列,那么最大线程数和拒绝策略都将失效(所以这里不以无界队列为例，而是使用有界队列来举例子)
+                    - if 工作线程数 < 核心线程数
+                        - 创建新的线程来执行此次提交的任务
+                    - 否则调用queue.offer()进行入队
+                        - 入队成功,那么等待核心线程来执行
+                        - 否则入队失败
+                    - 入队失败,if 工作线程数 < 最大线程数
+                        - 创建新的线程来执行此次提交的任务(非核心线程)
+                    - 否则调用queue.rejectedExecution()进行拒绝
+
+                如果：corePoolSize = 10 , maxPoolSize = 200, queueCapacity = 10000
+                那么当10个线程都在执行任务的时候,此时来了第11个任务,那么此时任务会进入到队列中等待
+                所以这个时候tomcat的并发最大就是corePoolSize了 - 默认就是10
+                只有当队列满了才会创建新的线程,所以这个时候就需要具有特性的队列 - TaskQueue
+                < ==== 下面就看下 TaskQueue.offer()方法===== >
+
+            */
             TaskQueue taskqueue = new TaskQueue();
             TaskThreadFactory tf = new TaskThreadFactory(getName() + "-exec-", daemon, getThreadPriority());
+            // 默认的核心线程数 = 10，最大线程数 = 200 ， 非核心线程的超时时间为60s
             executor = new ThreadPoolExecutor(getMinSpareThreads(), getMaxThreads(), 60, TimeUnit.SECONDS,taskqueue, tf);
             taskqueue.setParent( (ThreadPoolExecutor) executor);
         }
@@ -1325,7 +1345,7 @@ public abstract class AbstractEndpoint<S,U> {
 
     private void bindWithCleanup() throws Exception {
         try {
-            bind();
+            bind(); // 调用子类实现的bind()方法 - NioEndPoint
         } catch (Throwable t) {
             // Ensure open sockets etc. are cleaned up if something goes
             // wrong during bind
@@ -1337,6 +1357,7 @@ public abstract class AbstractEndpoint<S,U> {
 
 
     public void init() throws Exception {
+        // 该值默认为true,也即在初始化(init())时就绑定端口
         if (bindOnInit) {
             bindWithCleanup();
             bindState = BindState.BOUND_ON_INIT;
@@ -1410,6 +1431,7 @@ public abstract class AbstractEndpoint<S,U> {
 
 
     public final void start() throws Exception {
+        // 如果未绑定,则进行绑定,不过默认情况是在初始化的时候就进行bind()了
         if (bindState == BindState.UNBOUND) {
             bindWithCleanup();
             bindState = BindState.BOUND_ON_START;
@@ -1479,7 +1501,10 @@ public abstract class AbstractEndpoint<S,U> {
     protected Log getLogCertificate() {
         return getLog();
     }
-
+    /*
+        1. 如果 maxConnections = -1,那么代表不限制连接数,直接返回即可(生存环境下会做限制吗？)
+        2. 否则:初始化 LimitLatch(传入maxConnections - 默认为 8*1024 = 8192-8K)
+    */
     protected LimitLatch initializeConnectionLatch() {
         if (maxConnections==-1) {
             return null;

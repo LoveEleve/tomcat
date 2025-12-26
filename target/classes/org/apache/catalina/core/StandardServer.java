@@ -856,6 +856,8 @@ public final class StandardServer extends LifecycleMBeanBase implements Server {
             }
         }
         // Initialize our defined Services
+        // 在初始化Server时,会初始化所有的Service
+        // 问题:默认有几个service呢?
         synchronized (servicesLock) {
             for (Service service : services) {
                 service.init();

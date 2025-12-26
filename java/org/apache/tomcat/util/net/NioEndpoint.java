@@ -191,8 +191,15 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
      */
     @Override
     public void bind() throws Exception {
+        // 初始化服务器套接字
         initServerSocket();
-
+        // 创建停止闩锁（用于优雅停机）
+        /*
+            CountDownLatch countDownLatch = new CountDownLatch(1);
+            countDownLatch.countDown(); // 将内部的计数-1(最后一个置为0的线程负责唤醒await()阻塞的线程)
+            countDownLatch.await(); / /如果计数不为0,那么将会阻塞等待
+            这个stopLatch就是用来专门等待Poller线程停止的
+        */
         setStopLatch(new CountDownLatch(1));
 
         // Initialize SSL if needed
@@ -202,7 +209,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
     // Separated out to make it easier for folks that extend NioEndpoint to
     // implement custom [server]sockets
     protected void initServerSocket() throws Exception {
-        if (getUseInheritedChannel()) {
+        if (getUseInheritedChannel()) { // 这里默认为false
             // Retrieve the channel provided by the OS
             Channel ic = System.inheritedChannel();
             if (ic instanceof ServerSocketChannel) {
@@ -211,12 +218,40 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             if (serverSock == null) {
                 throw new IllegalArgumentException(sm.getString("endpoint.init.bind.inherited"));
             }
-        } else {
+        } else { // 这里为默认逻辑
+            // 1.创建ServerSocketChannel(服务端)
             serverSock = ServerSocketChannel.open();
+            // 2.设置 socket 属性 - 这个 socketProperties 属性对象很重要
+            /*
+                问题:如何自定义这个socketProperties配置呢？
+                    1.在server.xml的<Connector/>中配置
+                    2.在SpringBoot中可以直接在xxx.properties/xxx.yml中配置
+                      或者可以通过如下方式配置:
+                    --
+                        @Configuration
+                        @Profile("prod")
+                        public class TomcatConfig {
+                            @Bean
+                            public WebServerFactoryCustomizer<TomcatServletWebServerFactory> prodTomcatCustomizer() {
+                                return factory -> {
+                                    factory.addConnectorCustomizers(connector -> {
+                                        Http11NioProtocol protocol = (Http11NioProtocol) connector.getProtocolHandler();
+
+                                        // 生产环境特殊配置
+                                        protocol.setProperty("socket.directSslBuffer", "true");
+                                        protocol.setProperty("socket.bufferPool", "500");
+                                    });
+                                };
+                            }
+                        }
+            */
             socketProperties.setProperties(serverSock.socket());
+            // 3.创建绑定地址
             InetSocketAddress addr = new InetSocketAddress(getAddress(), getPortWithOffset());
+            // 4.绑定地址
             serverSock.socket().bind(addr,getAcceptCount());
         }
+        // 设置为阻塞模式(为什么要设置为阻塞模式呢?)
         serverSock.configureBlocking(true); //mimic APR behavior
     }
 
@@ -230,7 +265,30 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
         if (!running) {
             running = true;
             paused = false;
-
+            // ========== 1. 初始化对象缓存池（性能优化）==========
+            /*
+                对象缓存池:
+                    - Processor 缓存池: 用于缓存 Processor 对象
+                        - Processor对象 : HTTP协议处理器对象
+                    ========>
+                    - Event 缓存池: 用于缓存 Event 对象
+                        - PollerEvent对象 : 用于将Socket注册到 Poller的 Selector
+                        常见的用法:
+                        // Acceptor 接收到新连接后
+                        PollerEvent event = eventCache.pop();  // 从缓存获取
+                        if (event == null) {
+                            event = new PollerEvent(socket, OP_READ);
+                        }
+                        poller.addEvent(event);  // 提交给 Poller     
+                    ========>                   
+                    - Buffer 缓存池: 用于缓存 Buffer 对象
+                        - NioChannel对象 : 缓存 NioChannel对象及其关联的ByteBuffer - (NioChannel封装了SocketChannel和读写缓存区)
+                            class NioChannel {
+                                SocketChannel sc;          // 原生 NIO Channel
+                                ByteBuffer readBuffer;     // 读缓冲区
+                                ByteBuffer writeBuffer;    // 写缓冲区
+                            }
+            */
             if (socketProperties.getProcessorCache() != 0) {
                 processorCache = new SynchronizedStack<>(SynchronizedStack.DEFAULT_SIZE,
                         socketProperties.getProcessorCache());
@@ -245,20 +303,23 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             }
 
             // Create worker collection
+            // ========== 2. 创建工作线程池 ==========
             if (getExecutor() == null) {
-                createExecutor();
+                createExecutor(); // 创建处理请求的线程池
             }
+            // ========== 3. 初始化连接限流器 ==========
+            initializeConnectionLatch(); // 限制最大并发连接数
 
-            initializeConnectionLatch();
-
+            // ========== 4. 创建并启动 Poller 线程 ==========
             // Start poller thread
-            poller = new Poller();
+            poller = new Poller(); // 启动事件轮询线程
             Thread pollerThread = new Thread(poller, getName() + "-Poller");
             pollerThread.setPriority(threadPriority);
             pollerThread.setDaemon(true);
             pollerThread.start();
-
-            startAcceptorThread();
+            
+            // ========== 5. 启动 Acceptor 线程 ==========
+            startAcceptorThread(); // 启动接收连接的线程
         }
     }
 
@@ -523,11 +584,19 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
     /**
      * Poller class.
      */
+    /*
+        Poller 是 Tomcat NIO 模型中的事件轮询器,负责监听已建立连接的 I/O 事件(可读/可写),是 Reactor 模式中的核心组件
+            核心职责:
+                - 监听 Socket I/O 事件: 使用 NIO Selector 监听多个 Socket 的读写事件
+                - 事件分发: 当 Socket 就绪时,将其分发给工作线程池处理
+                - 连接管理: 管理所有已建立的长连接(Keep-Alive)
+                - 超时检测: 定期检查并清理超时的连接
+    */
     public class Poller implements Runnable {
 
-        private Selector selector;
-        private final SynchronizedQueue<PollerEvent> events =
-                new SynchronizedQueue<>();
+        private Selector selector; // NIO 多路复用选择器
+        private final SynchronizedQueue<PollerEvent> events = 
+                new SynchronizedQueue<>(); // 事件队列 - 实现 GC-Free
 
         private volatile boolean close = false;
         // Optimize expiration handling

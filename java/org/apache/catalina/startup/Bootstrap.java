@@ -55,15 +55,23 @@ public final class Bootstrap {
     private static final Object daemonLock = new Object();
     private static volatile Bootstrap daemon = null;
 
-    private static final File catalinaBaseFile;
-    private static final File catalinaHomeFile;
+    private static final File catalinaBaseFile; // Tomcat 的安装目录(二进制文件目录)
+    private static final File catalinaHomeFile; // Tomcat 的实例目录(配置和应用目录)
 
     private static final Pattern PATH_PATTERN = Pattern.compile("(\"[^\"]*\")|(([^,])*)");
+    /*
+        静态代码块在类加载的时候执行,早于任何方法的执行
+        用于初始化 catalinaHomeFile 和 catalinaBaseFile 两个静态常量
 
+    */
     static {
         // Will always be non-null
+        // 获取用户当前工作目录(默认为源码根目录)
         String userDir = System.getProperty("user.dir");
-
+        /*
+            确定 CATALINA_HOME(三种方式)
+                1.从系统属性读取
+        */
         // Home first
         String home = System.getProperty(Constants.CATALINA_HOME_PROP);
         File homeFile = null;
@@ -139,12 +147,25 @@ public final class Bootstrap {
 
     private void initClassLoaders() {
         try {
+            // 创建公共类加载器,用于加载Tomcat和所有WebApp都共享的类库(默认加载的路径如下)
+            // common.loader="${catalina.base}/lib","${catalina.base}/lib/*.jar","${catalina.home}/lib","${catalina.home}/lib/*.jar"
+            // common loader 的 parent 是 App Loader
             commonLoader = createClassLoader("common", null);
+            // 当 catalina.properties 文件不存在或 common.loader 配置为空时
+            // 使用当前类（Bootstrap）的类加载器作为 commonLoader
+            // 不过一般是不会出现这种情况的,可以忽略
             if (commonLoader == null) {
                 // no config file, default to this loader - we might be in a 'single' env.
                 commonLoader = this.getClass().getClassLoader();
             }
+            // 创建 Catalina 容器专用类加载器，用于加载 Tomcat 容器内部使用的类
+            // 对应配置文件中的server.loader,默认实现为null,父加载器为common
+            // 默认实现: catalinaLoader = commonLoader
+            // 这个加载器所加载的类对Web应用不可见,实现容器与应用的隔离
             catalinaLoader = createClassLoader("server", commonLoader);
+            // 创建共享类加载器，用于加载所有 Web 应用共享的类库
+            // 默认实现：sharedLoader = commonLoader
+            // 加载的类对所有 Web 应用可见，但对 Tomcat 容器不可见
             sharedLoader = createClassLoader("shared", commonLoader);
         } catch (Throwable t) {
             handleThrowable(t);
@@ -155,8 +176,8 @@ public final class Bootstrap {
 
 
     private ClassLoader createClassLoader(String name, ClassLoader parent) throws Exception {
-
         String value = CatalinaProperties.getProperty(name + ".loader");
+        // 如果配置为空,则返回父加载器
         if ((value == null) || (value.equals(""))) {
             return parent;
         }
@@ -247,9 +268,13 @@ public final class Bootstrap {
      * @throws Exception Fatal initialization error
      */
     public void init() throws Exception {
-
+        // 初始化3个类加载器：commonLoader,catalinaLoader,sharedLoader
+        // 默认的实现为(单实例部署)：commonLoader = catalinaLoader = sharedLoader
         initClassLoaders();
-
+        // 将当前线程的上下文类加载器设置为 catalinaLoader
+        // 确保 Tomcat 容器内部的类加载使用正确的类加载器
+        // 某些框架（如 JDBC、JNDI）会使用线程上下文类加载器来加载类
+        // 通过设置上下文类加载器，可以打破双亲委派模型，让这些框架能够加载到应用层的类
         Thread.currentThread().setContextClassLoader(catalinaLoader);
 
         SecurityClassLoad.securityClassLoad(catalinaLoader);
@@ -258,6 +283,7 @@ public final class Bootstrap {
         if (log.isTraceEnabled()) {
             log.trace("Loading startup class");
         }
+        // 通过反射创建Catalina对象,为什么不直接通过 new Catalina()呢？
         Class<?> startupClass = catalinaLoader.loadClass("org.apache.catalina.startup.Catalina");
         Object startupInstance = startupClass.getConstructor().newInstance();
 
@@ -265,6 +291,7 @@ public final class Bootstrap {
         if (log.isTraceEnabled()) {
             log.trace("Setting startup class properties");
         }
+        // 通过反射设置 Catalina 的父类加载器
         String methodName = "setParentClassLoader";
         Class<?> paramTypes[] = new Class[1];
         paramTypes[0] = Class.forName("java.lang.ClassLoader");
