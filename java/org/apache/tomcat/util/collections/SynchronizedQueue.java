@@ -56,7 +56,7 @@ public class SynchronizedQueue<T> {
     public synchronized boolean offer(T t) {
         queue[insert++] = t;
 
-        // Wrap 到达数组末尾,下一次在0位置插入 test
+        // Wrap 到达数组末尾,下一次在0位置插入 good
         if (insert == size) {
             insert = 0;
         }
