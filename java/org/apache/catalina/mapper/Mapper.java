@@ -1616,6 +1616,11 @@ public final class Mapper {
     }
 
     protected static final class ContextVersion extends MapElement<Context> {
+        /*
+            extends MapElement
+                public final String name; // 版本号
+                public final T object; // 指向 StandardContext实例
+        */
         public final String path;
         public final int slashCount;
         public final WebResourceRoot resources;

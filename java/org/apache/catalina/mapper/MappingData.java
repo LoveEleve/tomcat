@@ -29,11 +29,11 @@ import org.apache.tomcat.util.buf.MessageBytes;
  */
 public class MappingData {
 
-    public Host host = null;
-    public Context context = null;
+    public Host host = null; // 虚拟主机
+    public Context context = null; // Web应用
     public int contextSlashCount = 0;
     public Context[] contexts = null;
-    public Wrapper wrapper = null;
+    public Wrapper wrapper = null; // 对应的Servlet包装器(一个Servlet对应一个Wrapper)
     public boolean jspWildCard = false;
 
     /**

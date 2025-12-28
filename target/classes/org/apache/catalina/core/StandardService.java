@@ -90,7 +90,40 @@ public class StandardService extends LifecycleMBeanBase implements Service {
     /**
      * Mapper.
      * Mapper 是 Tomcat 的请求路由器，负责将 HTTP 请求路由到正确的 Web 应用
-     * 在 Mapper 内部维护了一个完整的路由映射:MappedHost[] hosts;(Host 映射)*/
+     * 在 Mapper 内部维护了一个完整的路由映射:MappedHost[] hosts;(Host 映射)
+     */
+    /*
+        一个Web应用对应着一个Context,以当前的debug-test为例子:
+        Mapper中的MapperHost[]中就有一个是debug-test相关的
+            - MapperHost
+                - MapperContext[] contextList : 这里才是debug-test真正相关的
+                    - xxx
+                    - MapperContext
+                        - ContextVersion[]:支持多版本,但是这不是重点,关键是其内部的属性
+                            - String name:版本号
+                            - Context object: 指向StandardContext对象
+                            - String path: "/debug-test"
+                            {这里是MappedWrapper对象,而内部则包含了StandardWrapper对象}
+                            - defaultWrapper:默认的StandardWrapper,比如 "/"
+                            - exactWrappers:精确匹配的StandardWrapper,比如 “/test”
+                        - name:"/debug-test"
+                        - object = null
+                    - xxx
+         那么当执行 curl http://localhost:8080/debug-test/test,最终是如何调用到我们所写的TestServlet.doGet()方法的呢?
+            - Host映射,首先通过localhost匹配到对应的Mapper中的MapperHost
+            - Context映射：/debug-test/test，找到MapperContext[1].name = "/debug-test"
+            - Wrapper映射：匹配内部的Wrapper中的ServletMappings中的 "/test"
+                - 最终的目的就是找到StandardWrapper
+                - 并且将结果封装为MapperData对象
+                {
+                    MapperData:
+                        - host = StandardHost("localhost")
+                        - context = StandardContext("/debug-test")
+                        - wrapper = StandardWrapper("TestServlet")
+                        - requestPath = "/test"
+                }
+
+    */
     protected final Mapper mapper = new Mapper();
 
 

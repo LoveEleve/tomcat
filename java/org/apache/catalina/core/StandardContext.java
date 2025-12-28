@@ -205,6 +205,18 @@ public class StandardContext extends ContainerBase implements Context, Notificat
      * The list of unique application listener class names configured for this application, in the order they were
      * encountered in the resulting merged web.xml file.
      */
+    /*
+        监听器类名列表：
+            存储 web.xml 中配置的监听器类名（字符串），还未实例化
+            {
+                <listener>
+                    <listener-class>org.springframework.web.context.ContextLoaderListener</listener-class>
+                </listener>
+                <listener>
+                    <listener-class>com.example.MySessionListener</listener-class>
+                </listener>
+            }
+    */
     private CopyOnWriteArrayList<String> applicationListeners = new CopyOnWriteArrayList<>();
 
     /**
@@ -217,6 +229,16 @@ public class StandardContext extends ContainerBase implements Context, Notificat
      * The list of instantiated application event listener objects. Note that SCIs and other code may use the
      * pluggability APIs to add listener instances directly to this list before the application starts.
      */
+    /*
+        存储已实例化的事件类型监听器
+            ServletContextAttributeListener   // Context 属性变化
+            ServletRequestAttributeListener   // Request 属性变化
+            ServletRequestListener            // Request 创建/销毁
+            HttpSessionIdListener             // Session ID 变化
+            HttpSessionAttributeListener      // Session 属性变化
+         触发时机:
+            在请求处理过程中被调用
+    */
     private List<Object> applicationEventListenersList = new CopyOnWriteArrayList<>();
 
 
@@ -224,6 +246,23 @@ public class StandardContext extends ContainerBase implements Context, Notificat
      * The set of instantiated application lifecycle listener objects. Note that SCIs and other code may use the
      * pluggability APIs to add listener instances directly to this list before the application starts.
      */
+    /*
+        存储已实例化的生命周期类型监听器
+            // 这些属于"生命周期监听器"
+            ServletContextListener   // Context 启动/销毁 ← Spring ContextLoaderListener
+            {
+                Spring的ContextLoaderListener就实现了ServletContextListener
+                也即在Context 启动时，初始化 Spring 容器
+
+
+            }
+            HttpSessionListener      // Session 创建/销毁
+        触发时机:
+            contextInitialized() - Context 启动时
+            contextDestroyed() - Context 销毁时
+
+
+    */
     private Object applicationLifecycleListenersObjects[] = new Object[0];
 
 
@@ -359,12 +398,44 @@ public class StandardContext extends ContainerBase implements Context, Notificat
     /**
      * The set of filter configurations (and associated filter instances) we have initialized, keyed by filter name.
      */
+    /*
+        存储已经实例化的Filter，在Context启动时创建(具体的方法时:StandardContext.filterStart())
+            - key = Filter名称
+            - value = ApplicationFilterConfig(包装了Filter实例)
+                      {
+                        private final Context context;          // 所属 StandardContext
+                        private Filter filter = null;           // 真正的 Filter 实例！
+                        private final FilterDef filterDef;      // 关联的 FilterDef
+                        private final Map<String,String> parameters;  // init-param
+                      }
+    */
     private HashMap<String,ApplicationFilterConfig> filterConfigs = new HashMap<>(); // Guarded by filterDefs
 
 
     /**
      * The set of filter definitions for this application, keyed by filter name.
      */
+    /*
+        key = Filter名称
+        value = FilterDef(Filter元数据)
+        {
+            FilterDef:
+                - String filterName :
+                - String filterClass : "com.debug.filter.EncodingFilter"
+                - Map<String,String> parameters : <init-param> 配置
+            {
+                <filter>
+                    <filter-name>EncodingFilter</filter-name>           → filterName
+                    <filter-class>com.debug.filter.EncodingFilter</filter-class>  → filterClass
+                    <init-param>
+                        <param-name>encoding</param-name>               → parameters
+                        <param-value>UTF-8</param-value>
+                    </init-param>
+                </filter>
+            }
+
+        }
+    */
     private HashMap<String,FilterDef> filterDefs = new HashMap<>();
 
 
@@ -373,6 +444,29 @@ public class StandardContext extends ContainerBase implements Context, Notificat
      * additional mappings added via the {@link ServletContext} possibly both before and after those defined in the
      * deployment descriptor.
      */
+
+    /*
+        存储Filter与URL/Servlet的映射关系，决定哪些请求会经过哪些Filter
+            {
+                ContextFilterMaps:
+                    FilterMap[] array = new FilterMap[0]
+                    {
+                        FilterMap:
+                            private String filterName;           // "EncodingFilter"
+                            private String[] urlPatterns;        // ["/*"]
+                            private String[] servletNames;       // 或指定 Servlet 名
+                            private int dispatcherMapping;       // REQUEST/FORWARD/INCLUDE/ERROR
+                    }
+            }
+
+            <filter-mapping>
+                <filter-name>EncodingFilter</filter-name>    → filterName
+                <url-pattern>/*</url-pattern>                → urlPatterns
+                <dispatcher>REQUEST</dispatcher>             → dispatcherMapping
+            </filter-mapping>
+     */
+
+
     private final ContextFilterMaps filterMaps = new ContextFilterMaps();
 
     /**
@@ -4743,7 +4837,7 @@ public class StandardContext extends ContainerBase implements Context, Notificat
         }
 
 
-        // Binding thread 
+        // Binding thread
         // 绑定线程上下文类加载器
         ClassLoader oldCCL = bindThread();
 
@@ -4942,7 +5036,7 @@ public class StandardContext extends ContainerBase implements Context, Notificat
 
             // Configure and call application filters
             /*
-                初始化 Filter 
+                初始化 Filter
                     - 遍历所有 FilterDef ，创建 ApplicationFilterConfig
                     - 调用 Filter 的 init() 方法
                     - 构建 Filter 链，为请求处理做准备
@@ -5009,12 +5103,12 @@ public class StandardContext extends ContainerBase implements Context, Notificat
                 broadcaster.sendNotification(notification);
             }
         } else {
-            /* 
+            /*
                 触发 AFTER_START_EVENT 事件
                 MapperListener.registerContext()  [批量注册映射到 Mapper]
                     - 下面去 MapperListener.registerContext()方法中看下
             */
-            setState(LifecycleState.STARTING); 
+            setState(LifecycleState.STARTING);
         }
     }
 

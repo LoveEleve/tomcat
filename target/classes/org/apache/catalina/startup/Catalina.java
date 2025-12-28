@@ -643,6 +643,7 @@ public class Catalina {
         // Start the new server
         try {
             getServer().start();
+            System.out.println("Server started");
         } catch (LifecycleException e) {
             log.fatal(sm.getString("catalina.serverStartFail"), e);
             try {
