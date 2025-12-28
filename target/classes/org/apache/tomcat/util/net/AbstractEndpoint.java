@@ -38,7 +38,7 @@ import java.util.concurrent.*;
 
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
-import javax.net.ssl.SSLContext;
+
 
 import org.apache.juli.logging.Log;
 import org.apache.tomcat.util.ExceptionUtils;
@@ -1282,9 +1282,10 @@ public abstract class AbstractEndpoint<S,U> {
      * selected the socket.
      *
      * @param socketWrapper The socket wrapper to process
-     * @param event         The socket event to be processed
+     * @param event         The socket event to be processed // socket事件类型
      * @param dispatch      Should the processing be performed on a new
      *                          container thread
+     *                      是否异步分发,对于常规请求(Http请求)提高到线程池进行异步执行 对于关闭/错误处理等请求则由当前线程立即处理
      *
      * @return if processing was triggered successfully
      */
@@ -1294,6 +1295,11 @@ public abstract class AbstractEndpoint<S,U> {
             if (socketWrapper == null) {
                 return false;
             }
+            /*
+                1. 从对象池中获取一个SocketProcessor对象,如果没有则创建一个新的
+                   这个对象是一个线程池任务,每个事件发生时进行创建/复用
+                   这里和后续的Processor对象不同
+            */
             SocketProcessorBase<S> sc = null;
             if (processorCache != null) {
                 sc = processorCache.pop();
@@ -1301,10 +1307,10 @@ public abstract class AbstractEndpoint<S,U> {
             if (sc == null) {
                 sc = createSocketProcessor(socketWrapper, event);
             } else {
-                sc.reset(socketWrapper, event);
+                sc.reset(socketWrapper, event); // 重置对象(因为是从对象池中获取的)
             }
-            Executor executor = getExecutor();
-            if (dispatch && executor != null) {
+            Executor executor = getExecutor(); // 获取 工作线程池
+            if (dispatch && executor != null) { // 提交到线程池中执行,下面去看下sc中的run()方法
                 executor.execute(sc);
             } else {
                 sc.run();
@@ -1430,7 +1436,7 @@ public abstract class AbstractEndpoint<S,U> {
     }
 
 
-    public final void start() throws Exception { 
+    public final void start() throws Exception {
         // 如果未绑定,则进行绑定,不过默认情况是在初始化的时候就进行bind()了
         if (bindState == BindState.UNBOUND) {
             bindWithCleanup();
@@ -1441,14 +1447,17 @@ public abstract class AbstractEndpoint<S,U> {
 
 
     protected void startAcceptorThread() {
-        // 创建Acceptor对象 - 传入了Endpoint
+        /*
+            创建Acceptor对象 - 传入了Endpoint对象
+            Acceptor本身就是一个Runnable对象
+         */
         acceptor = new Acceptor<>(this);
         String threadName = getName() + "-Acceptor";
         acceptor.setThreadName(threadName);
         Thread t = new Thread(acceptor, threadName);
         t.setPriority(getAcceptorThreadPriority());
         t.setDaemon(getDaemon());
-        t.start();
+        t.start(); // 启动线程
     }
 
 

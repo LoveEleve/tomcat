@@ -306,13 +306,19 @@ public class CoyoteAdapter implements Adapter {
         return success;
     }
 
-
+    /*
+        这里传入的两个参数：req/rsp 是 coyote 中的req/rsp
+    */
     @Override
     public void service(org.apache.coyote.Request req, org.apache.coyote.Response res) throws Exception {
-
+        /*
+            getNote() ：从 Coyote 对象中获取附加数据
+            ADAPTER_NOTES = 1 ：用于存储 Catalina 层 Request/Response 的槽位
+            首次请求时： request 和 response 为 null
+        */
         Request request = (Request) req.getNote(ADAPTER_NOTES);
         Response response = (Response) res.getNote(ADAPTER_NOTES);
-
+        // 创建 Catalina 层对象（首次请求）
         if (request == null) {
             // Create objects
             request = connector.createRequest();
@@ -344,11 +350,15 @@ public class CoyoteAdapter implements Adapter {
         try {
             // Parse and set Catalina and configuration specific
             // request parameters
+            // ========== 后置解析请求
+            // Mapper.map() 找到 Host → Context → Wrapper (根据 Host + URI 找到目标 Servlet)
             postParseSuccess = postParseRequest(req, request, res, response);
             if (postParseSuccess) {
                 // check valves if we support async
                 request.setAsyncSupported(connector.getService().getContainer().getPipeline().isAsyncSupported());
                 // Calling the container
+                // 调用 Servlet 容器
+                // StandardEngineValve.invoke() -> StandardHostValve.invoke() -> StandardContextValve.invoke() -> StandardWrapperValve.invoke()
                 connector.getService().getContainer().getPipeline().getFirst().invoke(request, response);
             }
             if (request.isAsync()) {

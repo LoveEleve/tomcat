@@ -844,7 +844,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
             recycledProcessors.clear();
         }
 
-
+        // 处理IO请求
         @Override
         public SocketState process(SocketWrapperBase<S> wrapper, SocketEvent status) {
             if (getLog().isTraceEnabled()) {
@@ -855,12 +855,13 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
                 return SocketState.CLOSED;
             }
 
-            S socket = wrapper.getSocket();
+            S socket = wrapper.getSocket(); // 获取Socket
 
             // We take complete ownership of the Processor inside of this method to ensure
             // no other thread can release it while we're using it. Whatever processor is
             // held by this variable will be associated with the SocketWrapper before this
             // method returns.
+            // 获取 Processor对象，这个对象的职责是用来解析HTTP请求的，可跨请求复用(不是跨连接,这里是针对一个TCP连接,多个HTTP请求 - 也即tcp的keepAlive机制)
             Processor processor = (Processor) wrapper.takeCurrentProcessor();
             if (getLog().isTraceEnabled()) {
                 getLog().trace(sm.getString("abstractConnectionHandler.connectionsGet", processor, socket));
@@ -886,6 +887,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
             }
 
             try {
+                // 暂时不关心
                 if (processor == null) {
                     String negotiatedProtocol = wrapper.getNegotiatedProtocol();
                     // OpenSSL typically returns null whereas JSSE typically
@@ -921,12 +923,14 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
                         }
                     }
                 }
+                // 从对象池中获取 Processor
                 if (processor == null) {
                     processor = recycledProcessors.pop();
                     if (getLog().isTraceEnabled()) {
                         getLog().trace(sm.getString("abstractConnectionHandler.processorPop", processor));
                     }
                 }
+                // 对象池中没有,创建一个新的,需要根据不同的协议创建不同的 Processor (在这里是 Http11Processor)
                 if (processor == null) {
                     processor = getProtocol().createProcessor();
                     register(processor);
@@ -939,6 +943,7 @@ public abstract class AbstractProtocol<S> implements ProtocolHandler, MBeanRegis
 
                 SocketState state = SocketState.CLOSED;
                 do {
+                    // 核心方法 - process()
                     state = processor.process(wrapper, status);
 
                     if (state == SocketState.UPGRADING) {

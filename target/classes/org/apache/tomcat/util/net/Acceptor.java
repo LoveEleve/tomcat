@@ -31,7 +31,7 @@ public class Acceptor<U> implements Runnable {
 
     private static final int INITIAL_ERROR_DELAY = 50;
     private static final int MAX_ERROR_DELAY = 1600;
-
+    // U -> SocketChannel
     private final AbstractEndpoint<?,U> endpoint;
     private String threadName;
     /*
@@ -45,7 +45,7 @@ public class Acceptor<U> implements Runnable {
 
 
     public Acceptor(AbstractEndpoint<?,U> endpoint) {
-        this.endpoint = endpoint;
+        this.endpoint = endpoint; // 持有Endpoint引用
     }
 
 
@@ -87,6 +87,12 @@ public class Acceptor<U> implements Runnable {
                 // < 1ms       - tight loop
                 // 1ms to 10ms - 1ms sleep
                 // > 10ms      - 10ms sleep
+                /*
+                    这里的逻辑默认不会执行,正常运行时endpoint.isPaused()为false
+                    执行的时机在: 优雅停机 / 手动暂停 / 配置热更新
+                    核心目的在于，避免新连接进入即将关闭的服务器
+                    ps:这里的逻辑暂时不了解,目前只关注核心逻辑
+                 */
                 while (endpoint.isPaused() && !stopCalled) {
                     if (state != AcceptorState.PAUSED) {
                         pauseStart = System.nanoTime();
@@ -114,6 +120,8 @@ public class Acceptor<U> implements Runnable {
 
                 try {
                     //if we have reached max connections, wait
+                    // 申请连接 - 默认最大连接数为8192,如果这里申请失败,那么Acceptor线程会阻塞(此时无法再接受新的连接)
+                    // 这里提出一个问题：什么时候关闭连接呢？
                     endpoint.countUpOrAwaitConnection();
 
                     // Endpoint might have been paused while waiting for latch
@@ -126,6 +134,18 @@ public class Acceptor<U> implements Runnable {
                     try {
                         // Accept the next incoming connection from the server
                         // socket
+                        /*
+                            接受新连接,这里就是调用accept()来阻塞接受的,并且ServerSock是被设置为了阻塞的(serverSock.configureBlocking(true))
+                            问题：为什么Acceptor线程没有使用Selector呢？而是直接使用accept()呢? 按照Netty的做法,这里应该是可读事件，然后调用accept()
+                            类型的问题：在Netty中,使用了BossGroup和WorkerGroup,当BossGroup = 1时,和这里的Acceptor是一样的，
+                            但是为什么在Netty中即使使用一个线程来接受新连接,也要使用Selector呢？
+                                - 在这里,其实对于网络连接来说,什么是瓶颈呢？
+                                  其实连接的接收并不耗时,真正耗时的在于后续的持续IO操作(读/写操作)以及业务处理(比如Http解析)
+                                - 那为什么Nett中也使用了Selector呢？
+                                  大概的原因是因为Netty中的一个线程(EventLoop)不仅仅需要接受新连接,在tomcat中,没有连接的话,那么Acceptor线程就阻塞了，
+                                  但是在Netty中,一个EventLoop还可能需要执行定时任务和异步任务,必须是非阻塞的
+                         */
+                        // 这里
                         socket = endpoint.serverSocketAccept();
                     } catch (Exception ioe) {
                         // We didn't get a socket
@@ -143,6 +163,10 @@ public class Acceptor<U> implements Runnable {
                     errorDelay = 0;
 
                     // Configure the socket
+                    /*
+                        配置socket(客户端),将socket交给Poller线程来处理
+                        核心方法:setSocketOptions()
+                     */
                     if (!stopCalled && !endpoint.isPaused()) {
                         // setSocketOptions() will hand the socket off to
                         // an appropriate processor if successful

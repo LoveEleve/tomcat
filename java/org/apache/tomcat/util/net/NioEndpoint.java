@@ -866,19 +866,27 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                     log.error(sm.getString("endpoint.nio.selectorLoopError"), x);
                     continue;
                 }
-                //
+                /*
+                    selectedKeys = {
+                            SelectionKey1 (OP_READ 就绪, 附件=socketWrapper1),
+                            SelectionKey2 (OP_WRITE 就绪, 附件=socketWrapper2),
+                            ...
+                        }
+                     有就绪的事件则获取对应的迭代器,后续依次处理,我猜测后面只会处理Read/Write
+                */
                 Iterator<SelectionKey> iterator =
                     keyCount > 0 ? selector.selectedKeys().iterator() : null;
                 // Walk through the collection of ready keys and dispatch
                 // any active event.
+                // 依次处理就绪的读写事件
                 while (iterator != null && iterator.hasNext()) {
                     SelectionKey sk = iterator.next();
                     iterator.remove();
-                    NioSocketWrapper socketWrapper = (NioSocketWrapper) sk.attachment();
+                    NioSocketWrapper socketWrapper = (NioSocketWrapper) sk.attachment(); // 获取到附件
                     // Attachment may be null if another thread has called
                     // cancelledKey()
                     if (socketWrapper != null) {
-                        processKey(sk, socketWrapper);
+                        processKey(sk, socketWrapper); // 处理就绪的读写事件
                     }
                 }
 
@@ -894,28 +902,45 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 if (close) {
                     cancelledKey(sk, socketWrapper);
                 } else if (sk.isValid()) {
-                    if (sk.isReadable() || sk.isWritable()) {
-                        if (socketWrapper.getSendfileData() != null) {
+                    if (sk.isReadable() || sk.isWritable()) { // 对应的socket是否可读或者可写
+                        if (socketWrapper.getSendfileData() != null) { // 文件读写,展示不考虑
                             processSendfile(sk, socketWrapper, false);
                         } else {
+                            /*
+                                这里是干什么？
+                                从方法名上看,是取消注册,这对应的应该是register()方法,而register()的主要作用是注册到Selector上,并且关心对应的事件
+                                而这里的unreg()方法则是做相反的操作，比如某个Socket关系OP_READ,那么在这里关心～OP_READ,也就是什么也都不关心
+                                ===
+                                为什么要这样做呢？比如当前的Socket中OP_READ事件就绪了,那么说明有数据可以读了,如果不取消掉会怎么样呢？
+                                在下面最终会将读数据的操作提交给 工作线程池来处理,
+                                如果不取消掉，此次读取数据的操作可能没有读取完数据「其实有没有读取完都没关系，因为只要有数据到了，那么Poller的下一次select()就会感知到」，
+                                那么下次select()的时候针对该socket还会触发OP_READ事件,
+                                这个时候Poller依旧是任务提交给线程池执行，这个时候不能保证读取数据的线程还是上一次的线程，
+                                所以造成的后果是什么呢？两个线程同时在操作同一个socket(读取socket中的数据)
+                                可能会有线程安全问题
+                                所以在这里取消对应的事件关注,避免了线程安全问题
+                                ===
+                                那什么时候会重新注册呢？
+
+                            */
                             unreg(sk, socketWrapper, sk.readyOps());
                             boolean closeSocket = false;
                             // Read goes before write
-                            if (sk.isReadable()) {
-                                if (socketWrapper.readOperation != null) {
+                            if (sk.isReadable()) { // 处理读事件
+                                if (socketWrapper.readOperation != null) { // 1. 异步读事件
                                     if (!socketWrapper.readOperation.process()) {
                                         closeSocket = true;
                                     }
-                                } else if (socketWrapper.readBlocking) {
+                                } else if (socketWrapper.readBlocking) { // 2.阻塞读等待
                                     synchronized (socketWrapper.readLock) {
                                         socketWrapper.readBlocking = false;
                                         socketWrapper.readLock.notify();
                                     }
-                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) {
+                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) { // 3.常规处理 - 处理HTTP请求(processSocket())
                                     closeSocket = true;
                                 }
                             }
-                            if (!closeSocket && sk.isWritable()) {
+                            if (!closeSocket && sk.isWritable()) { // 处理写事件
                                 if (socketWrapper.writeOperation != null) {
                                     if (!socketWrapper.writeOperation.process()) {
                                         closeSocket = true;
@@ -1776,7 +1801,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
              * in turn can result in unintentionally closing currently active
              * connections.
              */
-            Poller poller = NioEndpoint.this.poller;
+            Poller poller = NioEndpoint.this.poller; // 获取到对应的poller对象
             if (poller == null) {
                 socketWrapper.close();
                 return;
@@ -1785,15 +1810,16 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             try {
                 int handshake = -1;
                 try {
+                    // === 1. SSL/TLS 握手处理,对于HTTP来说不需要处理
                     if (socketWrapper.getSocket().isHandshakeComplete()) {
                         // No TLS handshaking required. Let the handler
                         // process this socket / event combination.
-                        handshake = 0;
+                        handshake = 0; // 握手完成或者不需要握手,对于HTTP请求走这个分支, handshake=0
                     } else if (event == SocketEvent.STOP || event == SocketEvent.DISCONNECT ||
                             event == SocketEvent.ERROR) {
                         // Unable to complete the TLS handshake. Treat it as
                         // if the handshake failed.
-                        handshake = -1;
+                        handshake = -1; // 错误/停止事件
                     } else {
                         handshake = socketWrapper.getSocket().handshake(event == SocketEvent.OPEN_READ, event == SocketEvent.OPEN_WRITE);
                         // The handshake process reads/writes from/to the
@@ -1814,12 +1840,14 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 } catch (CancelledKeyException ckx) {
                     handshake = -1;
                 }
+                // http请求走这个分支
                 if (handshake == 0) {
-                    SocketState state = SocketState.OPEN;
+                    SocketState state = SocketState.OPEN; // 默认状态:连接保持打开
                     // Process the request from this socket
-                    if (event == null) {
+                    if (event == null) { // 如果传入的event为空,默认当作读事件
                         state = getHandler().process(socketWrapper, SocketEvent.OPEN_READ);
-                    } else {
+                    } else { // 否则使用传入的事件类型(在这里是关注的是读事件)
+                        // 核心逻辑：获取Handle
                         state = getHandler().process(socketWrapper, event);
                     }
                     if (state == SocketState.CLOSED) {

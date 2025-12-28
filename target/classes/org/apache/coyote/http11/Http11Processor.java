@@ -475,24 +475,45 @@ public class Http11Processor extends AbstractProcessor {
         rp.setStage(org.apache.coyote.Constants.STAGE_PARSE);
 
         // Setting up the I/O
+        // 将socketWrapper设置给当前的processor,同时初始化输入/输出缓冲区
         setSocketWrapper(socketWrapper);
 
         // Flags
-        keepAlive = true;
-        openSocket = false;
-        readComplete = true;
-        boolean keptAlive = false;
-        SendfileState sendfileState = SendfileState.DONE;
-
+        keepAlive = true; // 默认为true,允许连接复用
+        openSocket = false; // socket保持打开标志,默认关闭,后续根据情况进行设置
+        readComplete = true; // 数据读取完成标志,默认为true
+        boolean keptAlive = false; // 是否是 Keep-Alive 复用连接：第一次请求为 false，后续请求为 true (用于 parseRequestLine() 判断是否需要等待数据)
+        SendfileState sendfileState = SendfileState.DONE; // 用于零拷贝文件传输，默认 DONE（无 sendfile 操作）
+        /*
+            1. !getErrorState().isError()：没有错误
+            2. keepAlive：	Keep-Alive 开启
+            3. !isAsync()：不是异步请求
+            4. upgradeToken == null：不是升级请求
+            5. sendfileState == SendfileState.DONE：没有 sendfile 操作
+            6. !endpoint.isPaused()：服务器没有暂停
+        */
         while (!getErrorState().isError() && keepAlive && !isAsync() && upgradeToken == null &&
                 sendfileState == SendfileState.DONE && !endpoint.isPaused()) {
 
             // Parsing the request header
             try {
+                /*
+                    解析请求行： GET /index.html HTTP/1.1
+                    keptAlive 参数：如果是 Keep-Alive 复用连接，会有不同的超时处理
+                    返回 false 表示数据不完整，需要等待更多数据
+                */
                 if (!inputBuffer.parseRequestLine(keptAlive)) {
+                    // Phase = -1：检测到 HTTP/2 前导帧（ PRI * HTTP/2.0 ），需要协议升级
                     if (inputBuffer.getParsingRequestLinePhase() == -1) {
                         return SocketState.UPGRADING;
-                    } else if (handleIncompleteRequestLineRead()) {
+                    }
+                    /*
+                        处理不完整读取：
+                            - 设置 openSocket = true （保持连接）
+                            - 如果已开始读取请求行，设置 readComplete = false
+                            - break 跳出循环，等待更多数据
+                    */
+                    else if (handleIncompleteRequestLineRead()) {
                         break;
                     }
                 }
@@ -500,6 +521,7 @@ public class Http11Processor extends AbstractProcessor {
                 // Process the Protocol component of the request line
                 // Need to know if this is an HTTP 0.9 request before trying to
                 // parse headers.
+                // 解析 HTTP 版本：判断是 HTTP/1.1、HTTP/1.0 还是 HTTP/0.9
                 prepareRequestProtocol();
 
                 if (endpoint.isPaused()) {
@@ -507,10 +529,12 @@ public class Http11Processor extends AbstractProcessor {
                     response.setStatus(503);
                     setErrorState(ErrorState.CLOSE_CLEAN, null);
                 } else {
-                    keptAlive = true;
+                    keptAlive = true; // 标记为 Keep-Alive 连接：下次循环时 parseRequestLine() 知道这是复用连接
                     // Set this every time in case limit has been changed via JMX
-                    request.getMimeHeaders().setLimit(endpoint.getMaxHeaderCount());
+                    request.getMimeHeaders().setLimit(endpoint.getMaxHeaderCount()); // 设置请求头数量限制：防止恶意请求发送过多头部（DoS 防护）
                     // Don't parse headers for HTTP/0.9
+                    // 解析请求头： Host: localhost 、 Content-Type: text/html
+                    // 返回 false 表示头部未读完，设置标志后 break 等待更多数据
                     if (!http09 && !inputBuffer.parseHeaders()) {
                         // We've read part of the request, don't recycle it
                         // instead associate it with the socket
@@ -614,6 +638,8 @@ public class Http11Processor extends AbstractProcessor {
             if (getErrorState().isIoAllowed()) {
                 try {
                     rp.setStage(org.apache.coyote.Constants.STAGE_SERVICE);
+                    // ===================== 核心方法,调用 adapter.service()方法处理请求 =====================
+                    // 这里的adapter是 CoyoteAdapter
                     getAdapter().service(request, response);
                     // Handle when the response was committed before a serious
                     // error occurred. Throwing a ServletException should both

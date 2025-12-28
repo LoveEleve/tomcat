@@ -38,8 +38,9 @@ public class NioChannel implements ByteChannel, ScatteringByteChannel, Gathering
     protected static final StringManager sm = StringManager.getManager(NioChannel.class);
 
     protected static final ByteBuffer emptyBuf = ByteBuffer.allocate(0);
-
+    // 缓冲区管理：封装了读写缓存区,统一管理读写缓存区
     protected final SocketBufferHandler bufHandler;
+    // client socket
     protected SocketChannel sc = null;
     protected NioSocketWrapper socketWrapper = null;
 

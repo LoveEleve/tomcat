@@ -279,8 +279,8 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                         if (event == null) {
                             event = new PollerEvent(socket, OP_READ);
                         }
-                        poller.addEvent(event);  // 提交给 Poller     
-                    ========>                   
+                        poller.addEvent(event);  // 提交给 Poller
+                    ========>
                     - Buffer 缓存池: 用于缓存 Buffer 对象
                         - NioChannel对象 : 缓存 NioChannel对象及其关联的ByteBuffer - (NioChannel封装了SocketChannel和读写缓存区)
                             class NioChannel {
@@ -317,7 +317,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             pollerThread.setPriority(threadPriority);
             pollerThread.setDaemon(true);
             pollerThread.start(); // 启动 - 开始执行run()方法
-            
+
             // ========== 5. 启动 Acceptor 线程 ==========
             startAcceptorThread(); // 启动接收连接的线程
         }
@@ -441,33 +441,42 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
         try {
             // Allocate channel and wrapper
             NioChannel channel = null;
+            /*
+                 从对象池中获取 NioChannel对象,如果对象池都没有了,那么临时创建一个新的,当然首先需要创建一个 SocketBufferHandler对象
+             */
             if (nioChannels != null) {
                 channel = nioChannels.pop();
             }
             if (channel == null) {
                 SocketBufferHandler bufhandler = new SocketBufferHandler(
-                        socketProperties.getAppReadBufSize(),
-                        socketProperties.getAppWriteBufSize(),
-                        socketProperties.getDirectBuffer());
-                if (isSSLEnabled()) {
+                        socketProperties.getAppReadBufSize(), // default 8192B
+                        socketProperties.getAppWriteBufSize(), //default 8192B
+                        socketProperties.getDirectBuffer()); // 是否使用堆外内存
+                if (isSSLEnabled()) { // Https连接,包含了SSL握手逻辑
                     channel = new SecureNioChannel(bufhandler, this);
                 } else {
-                    channel = new NioChannel(bufhandler);
+                    channel = new NioChannel(bufhandler); // 普通的Channel
                 }
             }
             NioSocketWrapper newWrapper = new NioSocketWrapper(channel, this);
-            channel.reset(socket, newWrapper);
-            connections.put(socket, newWrapper);
+            channel.reset(socket, newWrapper); // 将 NioChannel 与新的 SocketChannel 和 NioSocketWrapper 绑定
+            connections.put(socket, newWrapper); // 将连接注册到全局连接管理 Map(通过原生 Socket 快速查找对应的 Wrapper)
             socketWrapper = newWrapper;
 
             // Set socket properties
             // Disable blocking, polling will be used
-            socket.configureBlocking(false);
+            socket.configureBlocking(false); // 设置为非阻塞模式,这里针对的是socket「SocketChannel」
+            // 将配置的 Socket 属性应用到底层 Socket
             socketProperties.setProperties(socket.socket());
+            /*
+                设置读写超时,但是需要注意的是：这与 socket.setSoTimeout() 不同
+                soTimeout ：底层 Socket 阻塞读超时
+                readTimeout/writeTimeout ：Tomcat 应用层超时，由 Poller 的 timeout() 方法检测
 
-            socketWrapper.setReadTimeout(getConnectionTimeout());
-            socketWrapper.setWriteTimeout(getConnectionTimeout());
-            socketWrapper.setKeepAliveLeft(NioEndpoint.this.getMaxKeepAliveRequests());
+            */
+            socketWrapper.setReadTimeout(getConnectionTimeout()); // Poller 检测读超时（客户端长时间不发数据）
+            socketWrapper.setWriteTimeout(getConnectionTimeout()); // Poller 检测写超时（响应写入长时间阻塞）
+            socketWrapper.setKeepAliveLeft(NioEndpoint.this.getMaxKeepAliveRequests()); // 设置 Keep-Alive 请求数 ， 设置该连接剩余可复用次数
             poller.register(socketWrapper);
             return true;
         } catch (Throwable t) {
@@ -507,9 +516,11 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
 
     @Override
     protected SocketChannel serverSocketAccept() throws Exception {
+        // 调用accept()来接受新连接 - 阻塞方法(可以看到,对于Acceptor线程来说,并没有使用Selector)
         SocketChannel result = serverSock.accept();
 
         // Bug does not affect Windows. Skip the check on that platform.
+        // linux bug? 暂时不关心
         if (!JrePlatform.IS_WINDOWS) {
             SocketAddress currentRemoteAddress = result.getRemoteAddress();
             long currentNanoTime = System.nanoTime();
@@ -595,7 +606,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
     public class Poller implements Runnable {
 
         private Selector selector; // NIO 多路复用选择器 - 用于关心IO事件 (OP_READ / OP_WRITE / OP_REGISTER)
-        private final SynchronizedQueue<PollerEvent> events = 
+        private final SynchronizedQueue<PollerEvent> events =
                 new SynchronizedQueue<>(); // 事件队列(实现 GC-Free) - Acceptor线程会将事件对象(pollerEvent)放入到该队列中,然后Poller线程会进行消费
 
         private volatile boolean close = false; // 停机标识
@@ -609,17 +620,17 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                     - 达到 nextExpiration 时间
                     - 服务器正在关闭
         */
-        private long nextExpiration = 0; 
+        private long nextExpiration = 0;
         /*
             唤醒计数器（优化 selector 唤醒）
                 - 减少不必要的 selector.wakeup() 调用（该操作成本高）
                 - 无锁设计：使用 CAS 原子操作保证线程安全
             值:
-                - 0: Selector正在 select()阻塞
-                >0: 其他线程添加了新事件，需要唤醒
-                -1: Poller线程已经被唤醒,正在处理,此时使用selectNow()
+                - 0: Poller正在处理事件,不需要唤醒
+                >0: 已经有事件了,下一轮会直接调用selectNow()
+                -1: Poller即将/正在select(),需要调用wakeup()唤醒
         */
-        private AtomicLong wakeupCounter = new AtomicLong(0); 
+        private AtomicLong wakeupCounter = new AtomicLong(0);
 
         private volatile int keyCount = 0; // 就绪的事件数量
 
@@ -643,9 +654,10 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
         }
 
         private void addEvent(PollerEvent event) {
-            events.offer(event);
-            if (wakeupCounter.incrementAndGet() == 0) {
-                selector.wakeup();
+            events.offer(event); // 放入到 Poller中的events队列中
+            // 这里是 递增并且返回递增后的值,这里递增后=0,那么说明之前等于-1(poller可能阻塞在select()上)
+            if (wakeupCounter.incrementAndGet() == 0) { // 然后唤醒selector,因为Poller线程可能阻塞在select上
+                selector.wakeup(); // 下面去看下 Poller的run()方法
             }
         }
 
@@ -690,21 +702,32 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             boolean result = false;
 
             PollerEvent pe = null;
+            /*
+                处理队列中的任务(这个是由 Acceptor线程放入的)
+            */
             for (int i = 0, size = events.size(); i < size && (pe = events.poll()) != null; i++ ) {
                 result = true;
-                NioSocketWrapper socketWrapper = pe.getSocketWrapper();
-                SocketChannel sc = socketWrapper.getSocket().getIOChannel();
-                int interestOps = pe.getInterestOps();
+                NioSocketWrapper socketWrapper = pe.getSocketWrapper(); // 获取到 SocketWrapper
+                SocketChannel sc = socketWrapper.getSocket().getIOChannel(); // 获取到 SocketChannel
+                int interestOps = pe.getInterestOps(); // 获取到关心的事件 - 这里获取的是pe(也就是PollerEvent中的interestOps)中关心的事件,这里应该是OP_REGISTER
                 if (sc == null) {
                     log.warn(sm.getString("endpoint.nio.nullSocketChannel"));
                     socketWrapper.close();
-                } else if (interestOps == OP_REGISTER) {
+                } else if (interestOps == OP_REGISTER) { // 1. 新连接走这里的流程
                     try {
+                        /*
+                            socketChannel.register(selector,OP_READ,socketWrapper)
+                            public final SelectionKey register(Selector sel, int ops, Object att)
+                            在这里将当前客户端连接关注的事件设置为OP_READ,并且将socketWrapper作为附件
+                            需要注意的是：这里的OP_REGISTER是Tomcat内部自己的事件标识，专门用来标识新连接
+                            {而在Netty中则是通过attach来区分的，也即使用的是OP_READ}
+                            ps:然后呢?读写事件谁来处理呢?先不看下面的else分支,而是返回到Poller#run()方法中
+                        */
                         sc.register(getSelector(), SelectionKey.OP_READ, socketWrapper);
                     } catch (Exception x) {
                         log.error(sm.getString("endpoint.nio.registerFail"), x);
                     }
-                } else {
+                } else { // 2.
                     final SelectionKey key = sc.keyFor(getSelector());
                     if (key == null) {
                         // The key was cancelled (e.g. due to socket closure)
@@ -744,7 +767,15 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
          * @param socketWrapper The socket wrapper
          */
         public void register(final NioSocketWrapper socketWrapper) {
-            socketWrapper.interestOps(SelectionKey.OP_READ);//this is what OP_REGISTER turns into.
+            // 设置客户端连接关心的事件 - OP_READ (socketWrapper中的interestOps = OP_READ)
+            socketWrapper.interestOps(SelectionKey.OP_READ);//this is what OP_REGISTER turns into. OP_REGISTER 最终会转换成 OP_READ(这是什么意思?)
+            /*
+                 获取 PollerEvent对象,用于封装socket 和 其感兴趣的事情
+                 PollerEvent{
+                    private NioSocketWrapper socketWrapper; // 上面的socketWrapper
+                    private int interestOps; // OP_REGISTER
+                 }
+            */
             PollerEvent pollerEvent = createPollerEvent(socketWrapper, OP_REGISTER);
             addEvent(pollerEvent);
         }
@@ -790,16 +821,25 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
 
                 try {
                     if (!close) {
+                        // 在events()中至少处理了一个事件(新连接 / 读 / 写)
                         hasEvents = events();
+                        /*
+                            wakeupCounter状态机：
+                                - 0: 空闲
+                                > 0: Acceptor()每次调用addEvent()都会调用incrementAndGet() - 这代表有事件了
+                                -1: poller即将/已经阻塞在select()上
+                        */
+                        // 获取 wakeupCounter的值 并且设置为-1,如果大于0,说明有事件了,直接调用selectNow()返回就绪的事件个数
                         if (wakeupCounter.getAndSet(-1) > 0) {
                             // If we are here, means we have other stuff to do
                             // Do a non blocking select
                             keyCount = selector.selectNow();
-                        } else {
+                        } else { // 否则,wakeupCounter的旧值<=0，这代表没事件,那么阻塞在select上
                             keyCount = selector.select(selectorTimeout);
                         }
-                        wakeupCounter.set(0);
+                        wakeupCounter.set(0); // 重置为0
                     }
+                    // 关闭逻辑,暂时不考虑
                     if (close) {
                         events();
                         timeout(0, false);
@@ -811,7 +851,14 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                         break;
                     }
                     // Either we timed out or we woke up, process events first
+                    /*
+                        上面的返回的keyCount = 0
+                            - 可能是没有任何的socket有就绪的读写事件
+                            - 可能是selectorTimeout超时(默认是1s)
+                            - 或者被wakeup()唤醒但是实际上没有IO事件(比如新连接注册的时候)
+                    */
                     if (keyCount == 0) {
+                        // 更新hasEvents的值,因为在select()期间,Acceptor可能往events队列中添加了任务
                         hasEvents = (hasEvents | events());
                     }
                 } catch (Throwable x) {
@@ -819,19 +866,27 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                     log.error(sm.getString("endpoint.nio.selectorLoopError"), x);
                     continue;
                 }
-
+                /*
+                    selectedKeys = {
+                            SelectionKey1 (OP_READ 就绪, 附件=socketWrapper1),
+                            SelectionKey2 (OP_WRITE 就绪, 附件=socketWrapper2),
+                            ...
+                        }
+                     有就绪的事件则获取对应的迭代器,后续依次处理,我猜测后面只会处理Read/Write
+                */
                 Iterator<SelectionKey> iterator =
                     keyCount > 0 ? selector.selectedKeys().iterator() : null;
                 // Walk through the collection of ready keys and dispatch
                 // any active event.
+                // 依次处理就绪的读写事件
                 while (iterator != null && iterator.hasNext()) {
                     SelectionKey sk = iterator.next();
                     iterator.remove();
-                    NioSocketWrapper socketWrapper = (NioSocketWrapper) sk.attachment();
+                    NioSocketWrapper socketWrapper = (NioSocketWrapper) sk.attachment(); // 获取到附件
                     // Attachment may be null if another thread has called
                     // cancelledKey()
                     if (socketWrapper != null) {
-                        processKey(sk, socketWrapper);
+                        processKey(sk, socketWrapper); // 处理就绪的读写事件
                     }
                 }
 
@@ -847,28 +902,45 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 if (close) {
                     cancelledKey(sk, socketWrapper);
                 } else if (sk.isValid()) {
-                    if (sk.isReadable() || sk.isWritable()) {
-                        if (socketWrapper.getSendfileData() != null) {
+                    if (sk.isReadable() || sk.isWritable()) { // 对应的socket是否可读或者可写
+                        if (socketWrapper.getSendfileData() != null) { // 文件读写,展示不考虑
                             processSendfile(sk, socketWrapper, false);
                         } else {
+                            /*
+                                这里是干什么？
+                                从方法名上看,是取消注册,这对应的应该是register()方法,而register()的主要作用是注册到Selector上,并且关心对应的事件
+                                而这里的unreg()方法则是做相反的操作，比如某个Socket关系OP_READ,那么在这里关心～OP_READ,也就是什么也都不关心
+                                ===
+                                为什么要这样做呢？比如当前的Socket中OP_READ事件就绪了,那么说明有数据可以读了,如果不取消掉会怎么样呢？
+                                在下面最终会将读数据的操作提交给 工作线程池来处理,
+                                如果不取消掉，此次读取数据的操作可能没有读取完数据「其实有没有读取完都没关系，因为只要有数据到了，那么Poller的下一次select()就会感知到」，
+                                那么下次select()的时候针对该socket还会触发OP_READ事件,
+                                这个时候Poller依旧是任务提交给线程池执行，这个时候不能保证读取数据的线程还是上一次的线程，
+                                所以造成的后果是什么呢？两个线程同时在操作同一个socket(读取socket中的数据)
+                                可能会有线程安全问题
+                                所以在这里取消对应的事件关注,避免了线程安全问题
+                                ===
+                                那什么时候会重新注册呢？
+
+                            */
                             unreg(sk, socketWrapper, sk.readyOps());
                             boolean closeSocket = false;
                             // Read goes before write
-                            if (sk.isReadable()) {
-                                if (socketWrapper.readOperation != null) {
+                            if (sk.isReadable()) { // 处理读事件
+                                if (socketWrapper.readOperation != null) { // 1. 异步读事件
                                     if (!socketWrapper.readOperation.process()) {
                                         closeSocket = true;
                                     }
-                                } else if (socketWrapper.readBlocking) {
+                                } else if (socketWrapper.readBlocking) { // 2.阻塞读等待
                                     synchronized (socketWrapper.readLock) {
                                         socketWrapper.readBlocking = false;
                                         socketWrapper.readLock.notify();
                                     }
-                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) {
+                                } else if (!processSocket(socketWrapper, SocketEvent.OPEN_READ, true)) { // 3.常规处理 - 处理HTTP请求(processSocket())
                                     closeSocket = true;
                                 }
                             }
-                            if (!closeSocket && sk.isWritable()) {
+                            if (!closeSocket && sk.isWritable()) { // 处理写事件
                                 if (socketWrapper.writeOperation != null) {
                                     if (!socketWrapper.writeOperation.process()) {
                                         closeSocket = true;
@@ -1107,13 +1179,13 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
     }
 
     // --------------------------------------------------- Socket Wrapper Class
-
+    // 该类是Tomcat对单个客户端连接的完整封装
     public static class NioSocketWrapper extends SocketWrapperBase<NioChannel> {
 
         private final SynchronizedStack<NioChannel> nioChannels;
         private final Poller poller;
 
-        private int interestOps = 0;
+        private int interestOps = 0; // 关注的事件
         private volatile SendfileData sendfileData = null;
         private volatile long lastRead = System.currentTimeMillis();
         private volatile long lastWrite = lastRead;
@@ -1124,11 +1196,11 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
         private volatile boolean writeBlocking = false;
 
         public NioSocketWrapper(NioChannel channel, NioEndpoint endpoint) {
-            super(channel, endpoint);
-            nioChannels = endpoint.getNioChannels();
-            poller = endpoint.getPoller();
-            socketBufferHandler = channel.getBufHandler();
-            readLock = (readPending == null) ? new Object() : readPending;
+            super(channel, endpoint); // 保存 NioChannel 和 endpoint引用
+            nioChannels = endpoint.getNioChannels(); // 保存对象池引用，连接关闭时用于回收 NioChannel
+            poller = endpoint.getPoller(); // 保存 Poller 引用，后续注册/取消事件时使用
+            socketBufferHandler = channel.getBufHandler(); // 获取 NioChannel 的读写缓冲区处理器
+            readLock = (readPending == null) ? new Object() : readPending; // 用于阻塞式读写的线程同步
             writeLock = (writePending == null) ? new Object() : writePending;
         }
 
@@ -1729,7 +1801,7 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
              * in turn can result in unintentionally closing currently active
              * connections.
              */
-            Poller poller = NioEndpoint.this.poller;
+            Poller poller = NioEndpoint.this.poller; // 获取到对应的poller对象
             if (poller == null) {
                 socketWrapper.close();
                 return;
@@ -1738,15 +1810,16 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
             try {
                 int handshake = -1;
                 try {
+                    // === 1. SSL/TLS 握手处理,对于HTTP来说不需要处理
                     if (socketWrapper.getSocket().isHandshakeComplete()) {
                         // No TLS handshaking required. Let the handler
                         // process this socket / event combination.
-                        handshake = 0;
+                        handshake = 0; // 握手完成或者不需要握手,对于HTTP请求走这个分支, handshake=0
                     } else if (event == SocketEvent.STOP || event == SocketEvent.DISCONNECT ||
                             event == SocketEvent.ERROR) {
                         // Unable to complete the TLS handshake. Treat it as
                         // if the handshake failed.
-                        handshake = -1;
+                        handshake = -1; // 错误/停止事件
                     } else {
                         handshake = socketWrapper.getSocket().handshake(event == SocketEvent.OPEN_READ, event == SocketEvent.OPEN_WRITE);
                         // The handshake process reads/writes from/to the
@@ -1767,12 +1840,14 @@ public class NioEndpoint extends AbstractJsseEndpoint<NioChannel,SocketChannel> 
                 } catch (CancelledKeyException ckx) {
                     handshake = -1;
                 }
+                // http请求走这个分支
                 if (handshake == 0) {
-                    SocketState state = SocketState.OPEN;
+                    SocketState state = SocketState.OPEN; // 默认状态:连接保持打开
                     // Process the request from this socket
-                    if (event == null) {
+                    if (event == null) { // 如果传入的event为空,默认当作读事件
                         state = getHandler().process(socketWrapper, SocketEvent.OPEN_READ);
-                    } else {
+                    } else { // 否则使用传入的事件类型(在这里是关注的是读事件)
+                        // 核心逻辑：获取Handle
                         state = getHandler().process(socketWrapper, event);
                     }
                     if (state == SocketState.CLOSED) {
